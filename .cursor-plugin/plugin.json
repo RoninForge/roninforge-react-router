@@ -1,0 +1,31 @@
+{
+  "name": "roninforge-react-router",
+  "version": "1.0.0",
+  "description": "React Router 7 Framework Mode (formerly Remix) Cursor plugin: 45 anti-patterns, 10 rules, 5 skills, reviewer agent, correct + anti-pattern fixtures, validator. Catches the Remix v2 / RR v6 leftovers that pre-Oct-2024 LLMs still produce in a v7 project.",
+  "author": {
+    "name": "RoninForge",
+    "url": "https://roninforge.org"
+  },
+  "homepage": "https://github.com/RoninForge/roninforge-react-router",
+  "repository": "https://github.com/RoninForge/roninforge-react-router",
+  "license": "MIT",
+  "categories": [
+    "framework",
+    "react",
+    "react-router",
+    "typescript"
+  ],
+  "keywords": [
+    "react",
+    "react-router",
+    "react-router-7",
+    "framework-mode",
+    "remix",
+    "remix-migration",
+    "vite",
+    "typescript",
+    "tailwindcss",
+    "ssr",
+    "anti-patterns"
+  ]
+}

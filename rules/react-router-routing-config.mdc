@@ -1,0 +1,78 @@
+---
+description: React Router 7 routing config (app/routes.ts). Programmatic via index/route/layout/prefix from @react-router/dev/routes, or filesystem via flatRoutes() from @react-router/fs-routes. Covers the v7 file-naming conventions ($id dynamic, $.tsx splat, _index.tsx index, _layout.tsx pathless layout, ($lang) optional segment, users_.profile.tsx breakout). Refuses Next.js bracket conventions and bare index.tsx.
+globs: app/routes.ts,app/routes/**
+alwaysApply: false
+---
+
+# React Router 7 Routing Config
+
+`app/routes.ts` is the source of truth for routing. Two strategies: programmatic (preferred when route shape is known up front) and filesystem (faster scaffolding for many routes).
+
+## Programmatic via @react-router/dev/routes
+
+```ts
+// app/routes.ts
+import { type RouteConfig, index, route, layout, prefix } from "@react-router/dev/routes";
+
+export default [
+  index("routes/home.tsx"),
+  route("about", "routes/about.tsx"),
+
+  layout("routes/_marketing.tsx", [
+    route("pricing", "routes/pricing.tsx"),
+    route("blog/:slug", "routes/blog.$slug.tsx"),
+  ]),
+
+  ...prefix("api", [
+    route("health", "routes/api/health.ts"),
+  ]),
+
+  route("*", "routes/not-found.tsx"),
+] satisfies RouteConfig;
+```
+
+- `index(file)` mounts at the parent path.
+- `route(path, file, children?)` adds a URL and a UI segment.
+- `layout(file, children)` adds a UI wrapper without a URL segment.
+- `prefix(seg, children)` prepends a URL segment without a UI wrapper.
+
+## Filesystem via @react-router/fs-routes
+
+```ts
+import { type RouteConfig } from "@react-router/dev/routes";
+import { flatRoutes } from "@react-router/fs-routes";
+export default flatRoutes() satisfies RouteConfig;
+```
+
+`flatRoutes()` is async; await or return its promise. Default `rootDirectory: "routes"`.
+
+## File-name conventions (flat routes)
+
+| File                                    | URL                              | Notes                                       |
+|-----------------------------------------|----------------------------------|---------------------------------------------|
+| `_index.tsx`                            | `/`                              | Root index, not `index.tsx`                 |
+| `about.tsx`                             | `/about`                         |                                             |
+| `products._index.tsx`                   | `/products`                      | Index of the products layout                |
+| `products.$pid.tsx`                     | `/products/:pid`                 | `$` prefix for dynamic                      |
+| `products.$pid.edit.tsx`                | `/products/:pid/edit`            | Dots become slashes inside `routes/`        |
+| `docs.$.tsx`                            | `/docs/*`                        | `$.tsx` is splat (catch-all)                |
+| `_layout.tsx`                           | (none)                           | Pathless layout (leading underscore)        |
+| `($lang).about.tsx`                     | `/about` or `/:lang/about`       | `(...)` is optional segment                 |
+| `users.tsx` + `users.profile.tsx`       | `/users/profile` nested in `users.tsx` | Default nesting                       |
+| `users_.profile.tsx`                    | `/users/profile`                 | Trailing `_` breaks out of `users.tsx` layout |
+| `[sitemap.xml].tsx`                     | `/sitemap.xml`                   | `[...]` escapes special characters          |
+
+## Refused patterns
+
+- `app/routes/index.tsx` for `/`. Must be `_index.tsx`.
+- `app/routes/products.[id].tsx` (Next.js bracket). Must be `products.$id.tsx`.
+- `app/routes/docs.*.tsx`. Must be `docs.$.tsx`.
+- Defining the same path in both `flatRoutes()` and `route(...)`: v7 errors with a duplicate-route message.
+
+## Resource routes
+
+Routes that return raw HTTP `Response` (RSS, sitemap, JSON API) must export only `loader` and/or `action`, no `default`. See `react-router-route-modules.mdc` for the full shape.
+
+Sources:
+- https://reactrouter.com/start/framework/routing
+- https://api.reactrouter.com/v7/functions/_react_router_fs_routes.flatRoutes.html

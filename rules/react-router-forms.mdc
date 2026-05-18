@@ -1,0 +1,106 @@
+---
+description: React Router 7 forms. Use <Form method="post"> from react-router (not <form>), <fetcher.Form> for in-page mutations without navigation, useFormAction() for relative action URLs, conform-to + Zod for validation. Default method on <Form> is GET (runs the loader); mutations need method="post".
+globs: app/routes/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# React Router 7 Forms
+
+`<Form>` from `react-router` routes the submission through the matched route's `action`, supports pending UI, and avoids a full document navigation. A plain `<form>` does a full page reload and never reaches the route action.
+
+## Basic mutation
+
+```tsx
+import { Form } from "react-router";
+import type { Route } from "./+types/contact";
+import { z } from "zod";
+import { data } from "react-router";
+
+const ContactSchema = z.object({
+  email: z.string().email(),
+  message: z.string().min(1),
+});
+
+export async function action({ request }: Route.ActionArgs) {
+  const form = await request.formData();
+  const parsed = ContactSchema.safeParse(Object.fromEntries(form));
+  if (!parsed.success) {
+    return data({ fieldErrors: parsed.error.flatten().fieldErrors }, { status: 400 });
+  }
+  await sendMessage(parsed.data);
+  return { ok: true };
+}
+
+export default function Contact({ actionData }: Route.ComponentProps) {
+  return (
+    <Form method="post">
+      <label>
+        Email
+        <input name="email" type="email" required />
+        {actionData && "fieldErrors" in actionData && actionData.fieldErrors.email && (
+          <p role="alert">{actionData.fieldErrors.email[0]}</p>
+        )}
+      </label>
+      <label>
+        Message
+        <textarea name="message" required />
+      </label>
+      <button type="submit">Send</button>
+    </Form>
+  );
+}
+```
+
+## fetcher.Form
+
+In-page mutation without changing URL or navigating. Useful for "Add to cart", "Toggle favourite", inline edits.
+
+```tsx
+import { useFetcher } from "react-router";
+function AddToCart({ id }: { id: string }) {
+  const fetcher = useFetcher({ key: `add-${id}` });
+  const pending = fetcher.state !== "idle";
+  return (
+    <fetcher.Form method="post" action="/cart/add">
+      <input type="hidden" name="productId" value={id} />
+      <button disabled={pending} type="submit">{pending ? "Adding..." : "Add"}</button>
+    </fetcher.Form>
+  );
+}
+```
+
+When rendering many fetchers in a list, pass a unique `key` per fetcher; otherwise they share one slot and submissions stomp.
+
+## useFormAction
+
+Resolves the current route's URL so the action path tracks file renames.
+
+```tsx
+import { Form, useFormAction } from "react-router";
+function EditForm() {
+  const action = useFormAction();
+  return <Form method="post" action={action}>{/* ... */}</Form>;
+}
+```
+
+## Multipart uploads
+
+```tsx
+<Form method="post" encType="multipart/form-data">
+  <input type="file" name="avatar" />
+  <button type="submit">Upload</button>
+</Form>
+```
+
+On the server, parse with `request.formData()` (built-in) or a stream parser for large files.
+
+## Refused patterns
+
+- Plain `<form method="post">` for a route action. Triggers a full reload.
+- A mutation `<Form action="/x">` without `method="post"`. Defaults to GET, which runs the loader, not the action. Search and filter forms are the exception: GET is intentional, the URL is the canonical state.
+- `useFetcher()` (no key) inside a `.map()`. All fetchers share one slot.
+
+Sources:
+- https://reactrouter.com/api/components/Form
+- https://reactrouter.com/api/hooks/useFetcher
+- https://reactrouter.com/api/hooks/useFormAction

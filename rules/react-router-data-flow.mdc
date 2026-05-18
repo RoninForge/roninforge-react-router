@@ -1,0 +1,118 @@
+---
+description: React Router 7 data flow. Loaders and actions return plain values; Single Fetch serializes Date, Map, Set, Promise, Error, BigInt via turbo-stream. Use data() only to set status/headers, redirect() to navigate, throw Response or throw data() for HTTP errors. ErrorBoundary branches on isRouteErrorResponse. Stream deferred work via Await + Suspense (no defer() helper).
+globs: app/routes/**/*.{ts,tsx},app/root.tsx
+alwaysApply: false
+---
+
+# React Router 7 Data Flow
+
+v7 Single Fetch replaced Remix v2's `json()` and `defer()` helpers. Return plain values; the framework serializes them via turbo-stream.
+
+## Returning data
+
+```ts
+import type { Route } from "./+types/products";
+export async function loader({ params }: Route.LoaderArgs) {
+  return { product: await getProduct(params.pid) };       // plain object
+}
+```
+
+Allowed plain types: `string`, `number`, `boolean`, `null`, `undefined`, `Date`, `Map`, `Set`, `BigInt`, `URL`, `RegExp`, `Error`, plain object literals, arrays, and `Promise<T>` (streamed).
+
+Disallowed: arbitrary class instances (prototype lost), functions, `Symbol`. Map them to a plain shape before returning.
+
+## Setting status or headers
+
+Use `data()`:
+
+```ts
+import { data } from "react-router";
+export async function loader() {
+  return data({ ok: true }, { status: 201, headers: { "X-Trace": "abc" } });
+}
+```
+
+## Redirects
+
+```ts
+import { redirect } from "react-router";
+export async function action({ request }: Route.ActionArgs) {
+  await save(request);
+  return redirect("/done", { headers: { "Set-Cookie": "flash=ok" } });
+}
+```
+
+## HTTP errors
+
+Throw a `Response` or `throw data()` rather than `new Error(...)`. The ErrorBoundary branches on the status.
+
+```ts
+throw data({ message: "Forbidden" }, { status: 403 });
+throw new Response("Forbidden", { status: 403 });   // both fine
+```
+
+## ErrorBoundary
+
+```tsx
+import { isRouteErrorResponse } from "react-router";
+import type { Route } from "./+types/products.$pid";
+
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  if (isRouteErrorResponse(error)) {
+    return <div role="alert">{error.status} {error.statusText}: {error.data?.message}</div>;
+  }
+  return <div role="alert">Unexpected: {error instanceof Error ? error.message : String(error)}</div>;
+}
+```
+
+If the catch block in an action wraps `await save(...)`, rethrow `Response` instances:
+
+```ts
+try { await save(request); }
+catch (e) {
+  if (e instanceof Response) throw e;   // framework signal (redirect, 404, ...)
+  return { formError: String(e) };
+}
+```
+
+## Streaming with Await + Suspense
+
+Return a Promise from the loader as a property; consume it with `<Await>` inside `<Suspense>`.
+
+```tsx
+import { Await } from "react-router";
+import { Suspense } from "react";
+import type { Route } from "./+types/dashboard";
+
+export async function loader() {
+  return {
+    critical: await fetchCritical(),
+    slow: fetchSlow(),                    // unresolved Promise
+  };
+}
+
+export default function Dashboard({ loaderData }: Route.ComponentProps) {
+  return (
+    <>
+      <Header data={loaderData.critical} />
+      <Suspense fallback={<p>Loading...</p>}>
+        <Await resolve={loaderData.slow} errorElement={<p>Failed</p>}>
+          {(slow) => <SlowPanel data={slow} />}
+        </Await>
+      </Suspense>
+    </>
+  );
+}
+```
+
+## Refused patterns
+
+- `import { json, defer } from "react-router"`. Removed.
+- `throw new Error("Not Found")` for HTTP status. Use `throw data({...}, { status })`.
+- Catching all in an action without rethrowing `Response`. Swallows framework signals.
+- Returning a class instance and calling methods on it in the component. Prototype is stripped by turbo-stream.
+
+Sources:
+- https://reactrouter.com/start/framework/data-loading
+- https://reactrouter.com/explanation/special-files#single-fetch
+- https://reactrouter.com/api/utils/data

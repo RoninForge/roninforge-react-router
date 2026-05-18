@@ -1,0 +1,1238 @@
+---
+description: React Router 7 Framework Mode anti-patterns catalog (45 entries, CRIT to NIT). Catches Remix v2 leftovers (json/defer, @remix-run/*, RemixServer, remix.config.js, vitePlugin as remix), React Router v6 leftovers (BrowserRouter, react-router-dom, useTransition naming), and v7-specific traps (useLoaderData<typeof loader> instead of Route namespace, clientLoader without HydrateFallback, resource routes with default exports, missing httpOnly cookie attrs). Encodes the exact patterns LLMs trained before React Router v7 (Nov 2024) still produce when targeting a v7 Framework Mode project.
+globs: app/**/*.{ts,tsx},react-router.config.{ts,js},vite.config.{ts,js},routes.ts,package.json
+alwaysApply: false
+---
+
+# React Router 7 Framework Mode Anti-Patterns
+
+React Router v7 was released November 2024 as the merge of Remix and React Router. Framework Mode is the canonical default (the former Remix). LLMs trained before that date still produce Remix v2 and React Router v6 idioms in v7 projects. This catalog encodes the 45 most common breakages.
+
+Severity levels: CRIT (security or data loss), ERR (build break or runtime error), WARN (works but wrong), NIT (style or polish).
+
+---
+
+## CRIT
+
+### 1. vite-env-secret-leak
+
+**Severity:** CRIT
+
+**Tempting:**
+```tsx
+// app/routes/dashboard.tsx
+export async function loader() {
+  const key = import.meta.env.VITE_STRIPE_SECRET_KEY;
+  return fetch("https://api.stripe.com/...", {
+    headers: { Authorization: `Bearer ${key}` },
+  });
+}
+```
+
+**Why wrong:** Any `VITE_*` env var is inlined into the client bundle by Vite, even when read from a loader. A secret in `VITE_*` is leaked to every browser that loads the page.
+
+**Canonical:**
+```tsx
+// app/.server/env.ts
+import { z } from "zod";
+const Env = z.object({ STRIPE_SECRET_KEY: z.string().min(1) });
+export const env = Env.parse(process.env);
+
+// app/routes/dashboard.tsx
+import { env } from "~/.server/env";
+export async function loader() {
+  return fetch("https://api.stripe.com/...", {
+    headers: { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` },
+  });
+}
+```
+
+Source: https://vite.dev/guide/env-and-mode
+
+---
+
+### 2. server-module-imported-in-client
+
+**Severity:** CRIT
+
+**Tempting:**
+```tsx
+// app/lib/db.ts
+import { drizzle } from "drizzle-orm/postgres-js";
+export const db = drizzle(process.env.DATABASE_URL!);
+
+// app/routes/products.tsx
+import { db } from "~/lib/db";
+export default function Products() { /* ... */ }
+```
+
+**Why wrong:** Without a `.server.ts` suffix or `app/.server/` location, the bundler may ship the db module (and connection string) to the browser.
+
+**Canonical:**
+```tsx
+// app/.server/db.ts  (or app/lib/db.server.ts)
+import { drizzle } from "drizzle-orm/postgres-js";
+import { env } from "~/.server/env";
+export const db = drizzle(env.DATABASE_URL);
+```
+
+Source: https://reactrouter.com/how-to/server-only-code
+
+---
+
+### 3. hardcoded-session-secret
+
+**Severity:** CRIT
+
+**Tempting:**
+```ts
+// app/session.server.ts
+export const sessionStorage = createCookieSessionStorage({
+  cookie: { name: "__session", secrets: ["dev-secret"] },
+});
+```
+
+**Why wrong:** A hardcoded or `process.env.SESSION_SECRET!` (non-null-asserted with no validation) secret silently ships to production with a known value, allowing session forgery.
+
+**Canonical:**
+```ts
+// app/.server/env.ts
+import { z } from "zod";
+const Env = z.object({ SESSION_SECRET: z.string().min(32) });
+export const env = Env.parse(process.env);
+
+// app/.server/session.ts
+import { env } from "./env";
+export const sessionStorage = createCookieSessionStorage({
+  cookie: { name: "__session", secrets: [env.SESSION_SECRET] },
+});
+```
+
+Source: https://reactrouter.com/explanation/sessions-and-cookies
+
+---
+
+### 4. insecure-cookie-attrs
+
+**Severity:** CRIT
+
+**Tempting:**
+```ts
+createCookieSessionStorage({
+  cookie: { name: "__session", secrets: [env.SESSION_SECRET] },
+});
+```
+
+**Why wrong:** Missing `httpOnly` exposes the cookie to XSS-injected JS. Missing `secure` ships it over HTTP. Missing `sameSite` opens CSRF.
+
+**Canonical:**
+```ts
+createCookieSessionStorage({
+  cookie: {
+    name: "__session",
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30,
+    secrets: [env.SESSION_SECRET],
+  },
+});
+```
+
+Source: https://reactrouter.com/api/utils/createCookieSessionStorage
+
+---
+
+## ERR
+
+### 5. remix-run-react-import
+
+**Severity:** ERR
+
+**Tempting:**
+```tsx
+import { Link, useLoaderData } from "@remix-run/react";
+```
+
+**Why wrong:** `@remix-run/react` is replaced by `react-router` in v7. The package no longer publishes for v7 projects.
+
+**Canonical:**
+```tsx
+import { Link, useLoaderData } from "react-router";
+```
+
+Source: https://reactrouter.com/upgrading/remix
+
+---
+
+### 6. remix-run-node-import
+
+**Severity:** ERR
+
+**Tempting:**
+```ts
+import { createCookieSessionStorage } from "@remix-run/node";
+```
+
+**Why wrong:** `@remix-run/node` is replaced by `@react-router/node`. The Remix package will not resolve in a v7 project.
+
+**Canonical:**
+```ts
+import { createCookieSessionStorage } from "react-router";
+// runtime helpers (createReadableStreamFromReadable, etc.) live in:
+import { createReadableStreamFromReadable } from "@react-router/node";
+```
+
+Source: https://reactrouter.com/upgrading/remix
+
+---
+
+### 7. remix-config-js
+
+**Severity:** ERR
+
+**Tempting:**
+```js
+// remix.config.js
+module.exports = { ignoredRouteFiles: ["**/.*"] };
+```
+
+**Why wrong:** Remix Vite ignores `remix.config.js`. React Router v7 uses `react-router.config.ts`. Keeping the file misleads readers and silently does nothing.
+
+**Canonical:**
+```ts
+// react-router.config.ts
+import type { Config } from "@react-router/dev/config";
+export default { ssr: true } satisfies Config;
+```
+
+Source: https://reactrouter.com/api/framework-conventions/react-router.config.ts
+
+---
+
+### 8. remix-run-dev-vite
+
+**Severity:** ERR
+
+**Tempting:**
+```ts
+// vite.config.ts
+import { vitePlugin as remix } from "@remix-run/dev";
+export default defineConfig({ plugins: [remix()] });
+```
+
+**Why wrong:** v7 ships its own Vite plugin from `@react-router/dev/vite`. The Remix plugin will not understand v7 conventions.
+
+**Canonical:**
+```ts
+import { reactRouter } from "@react-router/dev/vite";
+import tailwindcss from "@tailwindcss/vite";
+export default defineConfig({ plugins: [tailwindcss(), reactRouter()] });
+```
+
+Source: https://reactrouter.com/start/framework/installation
+
+---
+
+### 9. remix-server-browser-components
+
+**Severity:** ERR
+
+**Tempting:**
+```tsx
+// app/entry.server.tsx
+import { RemixServer } from "@remix-run/react";
+// app/entry.client.tsx
+import { RemixBrowser } from "@remix-run/react";
+```
+
+**Why wrong:** Renamed in v7. `RemixServer` is now `ServerRouter`; `RemixBrowser` is now `HydratedRouter`.
+
+**Canonical:**
+```tsx
+// app/entry.server.tsx
+import { ServerRouter } from "react-router";
+// app/entry.client.tsx
+import { HydratedRouter } from "react-router/dom";
+```
+
+Source: https://reactrouter.com/upgrading/remix#step-2-rename-imports
+
+---
+
+### 10. remix-cli-scripts
+
+**Severity:** ERR
+
+**Tempting:**
+```json
+{ "scripts": { "dev": "remix vite:dev", "start": "remix-serve ./build/server/index.js" } }
+```
+
+**Why wrong:** The `remix` and `remix-serve` binaries do not exist in v7. Use `react-router` and `react-router-serve`.
+
+**Canonical:**
+```json
+{
+  "scripts": {
+    "dev": "react-router dev",
+    "build": "react-router build",
+    "start": "react-router-serve ./build/server/index.js",
+    "typecheck": "react-router typegen && tsc"
+  }
+}
+```
+
+Source: https://reactrouter.com/api/framework-conventions/package.json
+
+---
+
+### 11. jsx-routes-in-framework-mode
+
+**Severity:** ERR
+
+**Tempting:**
+```tsx
+import { BrowserRouter, Routes, Route } from "react-router";
+<BrowserRouter>
+  <Routes>
+    <Route path="/" element={<Home />} />
+  </Routes>
+</BrowserRouter>
+```
+
+**Why wrong:** Declarative JSX routing belongs to Declarative Mode (SPA libraries). In a Framework Mode project (with `routes.ts`), JSX routes silently never mount.
+
+**Canonical:**
+```ts
+// app/routes.ts
+import { type RouteConfig, index, route } from "@react-router/dev/routes";
+export default [
+  index("routes/home.tsx"),
+  route("about", "routes/about.tsx"),
+] satisfies RouteConfig;
+```
+
+Source: https://reactrouter.com/start/framework/routing
+
+---
+
+### 12. react-router-dom-package
+
+**Severity:** ERR
+
+**Tempting:**
+```json
+{ "dependencies": { "react-router-dom": "^6.30.0" } }
+```
+
+**Why wrong:** `react-router-dom` is a back-compat shim for v6. In v7 every import (Link, Form, useNavigate) lives in `react-router` or `react-router/dom`. Keeping `react-router-dom` installs a v6 shim alongside the v7 package, duplicating router internals and breaking type compatibility between the two contexts.
+
+**Canonical:**
+```json
+{ "dependencies": { "react-router": "^7.15.1" } }
+```
+
+Source: https://reactrouter.com/upgrading/v6
+
+---
+
+### 13. useloaderdata-typed-with-typeof-loader
+
+**Severity:** ERR
+
+**Tempting:**
+```tsx
+import { useLoaderData } from "react-router";
+export async function loader() { return { user: { id: 1 } }; }
+export default function Page() {
+  const data = useLoaderData<typeof loader>();
+}
+```
+
+**Why wrong:** v7 generates per-route typed namespaces via `react-router typegen`. Using `<typeof loader>` bypasses Single Fetch serialization typing and breaks when the loader returns `data()` or `Response`.
+
+**Canonical:**
+```tsx
+import type { Route } from "./+types/home";
+export async function loader({}: Route.LoaderArgs) {
+  return { user: { id: 1 } };
+}
+export default function Page({ loaderData }: Route.ComponentProps) {
+  return <div>{loaderData.user.id}</div>;
+}
+```
+
+Source: https://reactrouter.com/explanation/type-safety
+
+---
+
+### 14. missing-typegen-from-tsconfig
+
+**Severity:** ERR
+
+**Tempting:**
+```json
+// tsconfig.json
+{ "include": ["app/**/*"] }
+```
+
+**Why wrong:** The `Route` namespace lives in `.react-router/types/`. Without `.react-router/types/**/*` in `include`, every `import type { Route } from "./+types/..."` is `any`.
+
+**Canonical:**
+```json
+{
+  "include": ["app/**/*", ".react-router/types/**/*"],
+  "compilerOptions": {
+    "rootDirs": [".", "./.react-router/types"]
+  }
+}
+```
+
+Source: https://reactrouter.com/explanation/type-safety#typescript-integration
+
+---
+
+### 15. loaderfunction-actionfunction-types
+
+**Severity:** ERR
+
+**Tempting:**
+```ts
+import type { LoaderFunction, LoaderFunctionArgs, ActionFunction } from "react-router";
+export const loader: LoaderFunction = async ({ request }: LoaderFunctionArgs) => { /* ... */ };
+```
+
+**Why wrong:** These types still exist for Data Mode interop but lose Framework Mode benefits: per-route typegen, `Route.LoaderArgs` with typed params, and Single Fetch serialization typing.
+
+**Canonical:**
+```ts
+import type { Route } from "./+types/products";
+export async function loader({ request, params }: Route.LoaderArgs) {
+  // params.pid is string, typed from the route file name
+}
+```
+
+Source: https://reactrouter.com/start/framework/data-loading
+
+---
+
+### 16. json-utility-returned
+
+**Severity:** ERR
+
+**Tempting:**
+```ts
+import { json } from "react-router";
+export async function loader() {
+  return json({ user });
+}
+```
+
+**Why wrong:** `json()` was removed in v7. Single Fetch serializes plain values, including Date, Map, Set, Promise, Error, BigInt. Use `data()` only when you need to override status or headers.
+
+**Canonical:**
+```ts
+import { data } from "react-router";
+export async function loader() {
+  return { user };                              // plain return
+}
+// or, with status:
+export async function loader2() {
+  return data({ user }, { status: 201 });
+}
+```
+
+Source: https://reactrouter.com/start/framework/data-loading#returning-data-from-loaders
+
+---
+
+### 17. defer-utility-returned
+
+**Severity:** ERR
+
+**Tempting:**
+```ts
+import { defer } from "react-router";
+export async function loader() {
+  return defer({ critical: await fetchCritical(), slow: fetchSlow() });
+}
+```
+
+**Why wrong:** `defer()` was removed in v7. Single Fetch streams unresolved Promises natively. Return a Promise as a plain property and consume it with `<Await>`.
+
+**Canonical:**
+```tsx
+import { Await } from "react-router";
+import { Suspense } from "react";
+import type { Route } from "./+types/dashboard";
+
+export async function loader() {
+  return { critical: await fetchCritical(), slow: fetchSlow() };
+}
+
+export default function Dashboard({ loaderData }: Route.ComponentProps) {
+  return (
+    <Suspense fallback={<p>Loading slow data...</p>}>
+      <Await resolve={loaderData.slow}>
+        {(slow) => <pre>{JSON.stringify(slow)}</pre>}
+      </Await>
+    </Suspense>
+  );
+}
+```
+
+Source: https://reactrouter.com/start/framework/data-loading#streaming-with-suspense
+
+---
+
+### 18. meta-linksfunction-old-types
+
+**Severity:** ERR
+
+**Tempting:**
+```tsx
+import type { MetaFunction, LinksFunction } from "react-router";
+export const meta: MetaFunction = () => [{ title: "Home" }];
+export const links: LinksFunction = () => [{ rel: "icon", href: "/favicon.svg" }];
+```
+
+**Why wrong:** Framework Mode typegen ships `Route.MetaArgs` and `Route.LinksFunction` (per route). The generic types lose typed `loaderData` and `matches`.
+
+**Canonical:**
+```tsx
+import type { Route } from "./+types/home";
+export function meta({ data }: Route.MetaArgs) {
+  return [{ title: data?.title ?? "Home" }];
+}
+export const links: Route.LinksFunction = () => [
+  { rel: "icon", href: "/favicon.svg" },
+];
+```
+
+Source: https://reactrouter.com/start/framework/route-module#meta
+
+---
+
+### 19. throwing-plain-error-not-response
+
+**Severity:** ERR
+
+**Tempting:**
+```ts
+export async function loader({ params }: Route.LoaderArgs) {
+  const item = await db.find(params.id);
+  if (!item) throw new Error("Not Found");
+  return { item };
+}
+```
+
+**Why wrong:** A thrown `Error` becomes a 500 with no `data` payload. `isRouteErrorResponse(error)` returns false in the ErrorBoundary, losing status-based branching.
+
+**Canonical:**
+```ts
+import { data } from "react-router";
+export async function loader({ params }: Route.LoaderArgs) {
+  const item = await db.find(params.id);
+  if (!item) throw data({ message: "Not Found" }, { status: 404 });
+  return { item };
+}
+```
+
+Source: https://reactrouter.com/start/framework/data-loading#throwing-responses
+
+---
+
+### 20. catch-block-swallows-redirect
+
+**Severity:** ERR
+
+**Tempting:**
+```ts
+import { redirect } from "react-router";
+export async function action({ request }: Route.ActionArgs) {
+  try {
+    await save(request);
+    return redirect("/done");
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+```
+
+**Why wrong:** `redirect()` returns a `Response`. If something inside `save()` also throws a `Response` (404, redirect, etc.), the catch swallows the framework signal and returns it as form error data.
+
+**Canonical:**
+```ts
+import { isRouteErrorResponse, redirect } from "react-router";
+export async function action({ request }: Route.ActionArgs) {
+  try {
+    await save(request);
+  } catch (e) {
+    if (e instanceof Response) throw e;          // rethrow framework signals
+    return { error: String(e) };
+  }
+  return redirect("/done");
+}
+```
+
+Source: https://reactrouter.com/api/utils/redirect
+
+---
+
+### 21. loader-in-spa-non-root
+
+**Severity:** ERR
+
+**Tempting:**
+```ts
+// react-router.config.ts
+export default { ssr: false } satisfies Config;
+
+// app/routes/products.tsx
+export async function loader() { /* ... */ }
+```
+
+**Why wrong:** In SPA mode (`ssr: false`) only the root route may have a `loader` (used at prerender). Non-root server `loader`s cause a build error.
+
+**Canonical:**
+```ts
+// move data to clientLoader on non-root routes
+export async function clientLoader() {
+  return await fetch("/api/products").then((r) => r.json());
+}
+```
+
+Source: https://reactrouter.com/how-to/spa
+
+---
+
+### 22. node-api-in-clientloader
+
+**Severity:** ERR
+
+**Tempting:**
+```ts
+import fs from "node:fs/promises";
+export async function clientLoader() {
+  return JSON.parse(await fs.readFile("./data.json", "utf8"));
+}
+```
+
+**Why wrong:** `clientLoader` runs in the browser. Node built-ins are unresolved and the build either fails or the browser throws at runtime.
+
+**Canonical:**
+```ts
+// server-side loader for filesystem access
+import { readFile } from "node:fs/promises";
+export async function loader() {
+  return JSON.parse(await readFile("./data.json", "utf8"));
+}
+```
+
+Source: https://reactrouter.com/start/framework/data-loading#client-data-loading
+
+---
+
+### 23. clientloader-hydrate-without-fallback
+
+**Severity:** ERR
+
+**Tempting:**
+```tsx
+export async function loader() { return { initial: "from server" }; }
+export async function clientLoader() { return { initial: await fetchFresh() }; }
+clientLoader.hydrate = true as const;
+// No HydrateFallback export
+```
+
+**Why wrong:** With `clientLoader.hydrate = true`, v7 requires a `HydrateFallback` component to render during the initial client load. Omitting it throws at hydration.
+
+**Canonical:**
+```tsx
+export async function loader() { return { initial: "from server" }; }
+export async function clientLoader() { return { initial: await fetchFresh() }; }
+clientLoader.hydrate = true as const;
+export function HydrateFallback() { return <p>Loading...</p>; }
+export default function Page({ loaderData }: Route.ComponentProps) {
+  return <pre>{loaderData.initial}</pre>;
+}
+```
+
+Source: https://reactrouter.com/start/framework/data-loading#hydratefallback
+
+---
+
+### 24. missing-scripts-scrollrestoration-meta-links
+
+**Severity:** ERR
+
+**Tempting:**
+```tsx
+// app/root.tsx
+export default function App() {
+  return (
+    <html><body><Outlet /></body></html>
+  );
+}
+```
+
+**Why wrong:** Without `<Meta>`, `<Links>`, `<Scripts>`, and `<ScrollRestoration>` in the root document, the route module's meta/links never render, client-side navigation never hydrates, and scroll position is not restored.
+
+**Canonical:**
+```tsx
+import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
+export function Layout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <head>
+        <meta charSet="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <Meta />
+        <Links />
+      </head>
+      <body>
+        {children}
+        <ScrollRestoration />
+        <Scripts />
+      </body>
+    </html>
+  );
+}
+export default function App() { return <Outlet />; }
+```
+
+Source: https://reactrouter.com/start/framework/route-module#layout-export
+
+---
+
+### 25. resource-route-with-default-export
+
+**Severity:** ERR
+
+**Tempting:**
+```tsx
+// app/routes/api/health.ts
+export async function loader() { return new Response("ok"); }
+export default function Health() { return null; }
+```
+
+**Why wrong:** A route with a default export is treated as a UI route. Resource routes (raw HTTP responses, RSS, sitemaps, JSON APIs) must not export a default.
+
+**Canonical:**
+```ts
+// app/routes/api/health.ts
+export async function loader() {
+  return Response.json({ status: "ok" }, {
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+```
+
+Source: https://reactrouter.com/how-to/resource-routes
+
+---
+
+### 26. useviewtransition-prefix-unstable
+
+**Severity:** ERR
+
+**Tempting:**
+```tsx
+import { unstable_useViewTransitionState } from "react-router";
+<Link to="/photo/1" unstable_viewTransition>Photo</Link>
+```
+
+**Why wrong:** The `unstable_` prefix was dropped in v7. Imports and props with `unstable_*` no longer exist.
+
+**Canonical:**
+```tsx
+import { useViewTransitionState } from "react-router";
+<Link to="/photo/1" viewTransition>Photo</Link>
+```
+
+Source: https://reactrouter.com/start/framework/navigating#view-transitions
+
+---
+
+### 27. react-usetransition-confused-with-usenavigation
+
+**Severity:** ERR
+
+**Tempting:**
+```tsx
+import { useTransition } from "react-router";
+const transition = useTransition();
+if (transition.state === "submitting") return <Spinner />;
+```
+
+**Why wrong:** `useTransition` does not exist in `react-router`. The Remix v1 hook was renamed `useNavigation` in Remix v2 and stays that name in v7. React's `useTransition` is a different API.
+
+**Canonical:**
+```tsx
+import { useNavigation } from "react-router";
+const navigation = useNavigation();
+if (navigation.state === "submitting") return <Spinner />;
+```
+
+Source: https://reactrouter.com/api/hooks/useNavigation
+
+---
+
+## WARN
+
+### 28. form-tag-instead-of-Form
+
+**Severity:** WARN
+
+**Tempting:**
+```tsx
+<form method="post" action="/login">
+  <input name="email" />
+</form>
+```
+
+**Why wrong:** A plain `<form>` triggers a full document navigation. The `<Form>` component routes through the matched route's `action`, supports pending UI, and skips full reload.
+
+**Canonical:**
+```tsx
+import { Form } from "react-router";
+<Form method="post" action="/login">
+  <input name="email" />
+</Form>
+```
+
+Source: https://reactrouter.com/api/components/Form
+
+---
+
+### 29. form-default-get
+
+**Severity:** WARN
+
+**Tempting:** (a form clearly intended to mutate state)
+```tsx
+<Form action="/items/42/delete">
+  <button type="submit">Delete</button>
+</Form>
+```
+
+**Why wrong:** Without `method="post"`, `<Form>` defaults to GET, which runs a `loader`, not an `action`. Mutation handlers expect POST, so the delete (or any state-changing operation) never runs and a GET request lands in your read path.
+
+**Canonical:** For mutation forms, always declare the method explicitly:
+```tsx
+<Form method="post" action="/items/42/delete">
+  <button type="submit">Delete</button>
+</Form>
+```
+
+Search and filter forms are the exception. They are GET on purpose; the URL becomes the canonical state. Leave them without `method`:
+```tsx
+<Form action="/products">
+  <input name="q" placeholder="Search" />
+</Form>
+```
+
+Source: https://reactrouter.com/api/components/Form#method
+
+---
+
+### 30. navigate-when-redirect-would-do
+
+**Severity:** WARN
+
+**Tempting:**
+```tsx
+import { useNavigate } from "react-router";
+const nav = useNavigate();
+useEffect(() => { if (!user) nav("/login"); }, [user]);
+```
+
+**Why wrong:** Client-side `useNavigate` in an effect creates an authenticated-content flash before redirecting and runs the loader twice. Server `redirect()` from the loader is atomic.
+
+**Canonical:**
+```ts
+import { redirect } from "react-router";
+export async function loader({ request }: Route.LoaderArgs) {
+  const user = await getUser(request);
+  if (!user) throw redirect("/login");
+  return { user };
+}
+```
+
+Source: https://reactrouter.com/api/utils/redirect
+
+---
+
+### 31. link-no-prefetch-intent
+
+**Severity:** WARN
+
+**Tempting:**
+```tsx
+<Link to="/dashboard">Dashboard</Link>
+```
+
+**Why wrong:** Primary CTAs and nav links benefit from `prefetch="intent"` (prefetch on hover or focus). Without it, the loader fetch only starts on click.
+
+**Canonical:**
+```tsx
+<Link to="/dashboard" prefetch="intent">Dashboard</Link>
+```
+
+Source: https://reactrouter.com/api/components/Link#prefetch
+
+---
+
+### 32. sequential-awaits-in-loader
+
+**Severity:** WARN
+
+**Tempting:**
+```ts
+export async function loader({ params }: Route.LoaderArgs) {
+  const user = await getUser(params.id);
+  const orders = await getOrders(params.id);
+  const cart = await getCart(params.id);
+  return { user, orders, cart };
+}
+```
+
+**Why wrong:** Sequential `await`s add round trips. Independent queries should be parallel.
+
+**Canonical:**
+```ts
+export async function loader({ params }: Route.LoaderArgs) {
+  const [user, orders, cart] = await Promise.all([
+    getUser(params.id), getOrders(params.id), getCart(params.id),
+  ]);
+  return { user, orders, cart };
+}
+```
+
+Source: https://reactrouter.com/start/framework/data-loading
+
+---
+
+### 33. fetch-in-component-not-loader
+
+**Severity:** WARN
+
+**Tempting:**
+```tsx
+export default function Products() {
+  const [data, setData] = useState(null);
+  useEffect(() => { fetch("/api/products").then((r) => r.json()).then(setData); }, []);
+}
+```
+
+**Why wrong:** Bypasses SSR, breaks data-router caching, prevents prefetch, defers the network until after hydration.
+
+**Canonical:**
+```tsx
+export async function loader() {
+  return { products: await fetch("https://api.example.com/products").then((r) => r.json()) };
+}
+export default function Products({ loaderData }: Route.ComponentProps) {
+  return <ul>{loaderData.products.map((p) => <li key={p.id}>{p.name}</li>)}</ul>;
+}
+```
+
+Source: https://reactrouter.com/start/framework/data-loading
+
+---
+
+### 34. missing-shouldrevalidate-on-frequent-action
+
+**Severity:** WARN
+
+**Tempting:**
+```ts
+// No shouldRevalidate export. Every action on every nested route
+// re-runs every parent loader.
+```
+
+**Why wrong:** Default behavior revalidates all matched route loaders after any action. Heavy parent loaders re-run on every child mutation.
+
+**Canonical:**
+```ts
+import type { Route } from "./+types/<route>";
+
+export function shouldRevalidate({
+  formAction,
+  defaultShouldRevalidate,
+}: Route.ShouldRevalidateFunctionArgs) {
+  if (formAction === "/cart/add") return false;
+  return defaultShouldRevalidate;
+}
+```
+
+Source: https://reactrouter.com/start/framework/route-module#shouldrevalidate
+
+---
+
+### 35. returning-class-instance-or-map
+
+**Severity:** WARN
+
+**Tempting:**
+```ts
+class UserModel { constructor(public id: number) {} greet() { return `hi ${this.id}`; } }
+export async function loader() { return { user: new UserModel(1) }; }
+// In the component: loaderData.user.greet()  -> not a function
+```
+
+**Why wrong:** Single Fetch serializes via turbo-stream. Class instances lose their prototype across the wire; methods vanish. Plain objects, Date, Map, Set, BigInt, Promise, and Error survive; arbitrary classes do not.
+
+**Canonical:**
+```ts
+export async function loader() {
+  const u = new UserModel(1);
+  return { user: { id: u.id, greeting: u.greet() } };  // plain shape
+}
+```
+
+Source: https://reactrouter.com/explanation/special-files#single-fetch
+
+---
+
+### 36. index-tsx-for-index-route
+
+**Severity:** WARN
+
+**Tempting:**
+```
+app/routes/index.tsx
+```
+
+**Why wrong:** With `flatRoutes()` from `@react-router/fs-routes`, an index route must be `_index.tsx`. A bare `index.tsx` becomes a `/index` URL.
+
+**Canonical:**
+```
+app/routes/_index.tsx       --> "/"
+app/routes/products._index.tsx --> "/products"
+```
+
+Source: https://api.reactrouter.com/v7/functions/_react_router_fs_routes.flatRoutes.html
+
+---
+
+### 37. dotted-segment-without-underscore-breakout
+
+**Severity:** WARN
+
+**Tempting:**
+```
+app/routes/users.profile.tsx        // intended: "/users/profile" outside users layout
+```
+
+**Why wrong:** `users.profile.tsx` nests inside `users.tsx`. To break out (share URL nesting without UI nesting), use the trailing-underscore convention.
+
+**Canonical:**
+```
+app/routes/users_.profile.tsx       // "/users/profile" but not nested under users.tsx layout
+```
+
+Source: https://api.reactrouter.com/v7/functions/_react_router_fs_routes.flatRoutes.html
+
+---
+
+### 38. missing-dollar-for-dynamic-and-splat
+
+**Severity:** WARN
+
+**Tempting:**
+```
+app/routes/products.[id].tsx        // Next.js bracket syntax
+app/routes/docs.*.tsx               // glob in filename
+```
+
+**Why wrong:** v7 uses `$param` for dynamic and `$.tsx` for splat. Brackets do not match in `flatRoutes()`.
+
+**Canonical:**
+```
+app/routes/products.$id.tsx         // "/products/:id"
+app/routes/docs.$.tsx               // "/docs/*"
+```
+
+Source: https://api.reactrouter.com/v7/functions/_react_router_fs_routes.flatRoutes.html
+
+---
+
+### 39. route-collision-fs-plus-manual
+
+**Severity:** WARN
+
+**Tempting:**
+```ts
+import { flatRoutes } from "@react-router/fs-routes";
+import { route } from "@react-router/dev/routes";
+export default [
+  ...(await flatRoutes()),
+  route("about", "routes/about.tsx"),       // also exists as app/routes/about.tsx
+];
+```
+
+**Why wrong:** Two definitions for the same path. v7 throws a duplicate-route build error.
+
+**Canonical:**
+```ts
+// Pick one. If using fs-routes, do not also declare the same path manually.
+export default [...(await flatRoutes())] satisfies RouteConfig;
+```
+
+Source: https://reactrouter.com/start/framework/routing#mixing-strategies
+
+---
+
+### 40. setsearchparams-not-functional
+
+**Severity:** WARN
+
+**Tempting:**
+```tsx
+const [params, setParams] = useSearchParams();
+setParams({ page: "2" });
+setParams({ sort: "asc" });   // wipes page
+```
+
+**Why wrong:** Two non-functional updates in the same tick race; the second overwrites the first.
+
+**Canonical:**
+```tsx
+setParams((prev) => { prev.set("page", "2"); return prev; });
+setParams((prev) => { prev.set("sort", "asc"); return prev; });
+```
+
+Source: https://reactrouter.com/api/hooks/useSearchParams
+
+---
+
+### 41. useblocker-without-reset
+
+**Severity:** WARN
+
+**Tempting:**
+```tsx
+const blocker = useBlocker(dirty);
+// After save: form is clean but blocker is still in "blocked" state on next nav.
+```
+
+**Why wrong:** `useBlocker` keeps its `blocked` state until you call `blocker.reset()` (or `proceed()`). Forgetting it traps the user after a successful save.
+
+**Canonical:**
+```tsx
+useEffect(() => {
+  if (!dirty && blocker.state === "blocked") blocker.reset();
+}, [dirty, blocker]);
+```
+
+Source: https://reactrouter.com/api/hooks/useBlocker
+
+---
+
+### 42. usefetcher-no-key-when-many
+
+**Severity:** WARN
+
+**Tempting:**
+```tsx
+{items.map((it) => {
+  const fetcher = useFetcher();
+  return <fetcher.Form key={it.id} />;
+})}
+```
+
+**Why wrong:** Without a `key`, every row shares one fetcher slot. Submissions stomp each other; `fetcher.state` reflects whichever submitted last.
+
+**Canonical:**
+```tsx
+{items.map((it) => {
+  const fetcher = useFetcher({ key: `item-${it.id}` });
+  return <fetcher.Form key={it.id} />;
+})}
+```
+
+Source: https://reactrouter.com/api/hooks/useFetcher#key
+
+---
+
+### 43. lucia-still-imported
+
+**Severity:** WARN
+
+**Tempting:**
+```ts
+import { Lucia } from "lucia";
+import { BetterSqlite3Adapter } from "@lucia-auth/adapter-sqlite";
+export const lucia = new Lucia(/* ... */);
+```
+
+**Why wrong:** Lucia was deprecated and the maintainer archived the repo in 2025. Roll your own with `createCookieSessionStorage` + Argon2 hashing, or switch to a maintained library (`better-auth`, `auth.js`).
+
+**Canonical:**
+```ts
+// app/.server/session.ts
+import { createCookieSessionStorage } from "react-router";
+import { env } from "./env";
+export const sessionStorage = createCookieSessionStorage({
+  cookie: {
+    name: "__session", httpOnly: true, secure: env.NODE_ENV === "production",
+    sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 30,
+    secrets: [env.SESSION_SECRET],
+  },
+});
+```
+
+Source: https://lucia-auth.com/
+
+---
+
+## NIT
+
+### 44. no-useformaction-for-relative-posts
+
+**Severity:** NIT
+
+**Tempting:**
+```tsx
+<Form method="post" action="/users/123/edit">...</Form>
+```
+
+**Why wrong:** Hardcoding the route path breaks when the route file is moved or renamed. `useFormAction()` resolves the current route's URL.
+
+**Canonical:**
+```tsx
+import { Form, useFormAction } from "react-router";
+const action = useFormAction();  // resolves to current route
+<Form method="post" action={action}>...</Form>
+```
+
+Source: https://reactrouter.com/api/hooks/useFormAction
+
+---
+
+### 45. tsc-not-in-ci
+
+**Severity:** NIT
+
+**Tempting:**
+```json
+{ "scripts": { "ci": "react-router build" } }
+```
+
+**Why wrong:** `react-router build` does not type-check. Type errors land in production. The canonical `typecheck` script runs typegen first so `Route` namespace types exist.
+
+**Canonical:**
+```json
+{
+  "scripts": {
+    "build": "react-router build",
+    "typecheck": "react-router typegen && tsc",
+    "ci": "pnpm typecheck && pnpm build"
+  }
+}
+```
+
+Source: https://reactrouter.com/explanation/type-safety

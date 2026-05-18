@@ -1,0 +1,32 @@
+{
+  "name": "rr7-anti-pattern-sample",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "remix vite:dev",
+    "build": "remix vite:build",
+    "start": "remix-serve ./build/server/index.js"
+  },
+  "dependencies": {
+    "@remix-run/react": "^2.17.4",
+    "@remix-run/node": "^2.17.4",
+    "@remix-run/serve": "^2.17.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.0",
+    "isbot": "^4.4.0",
+    "lucia": "^3.2.0",
+    "@lucia-auth/adapter-sqlite": "^3.0.2"
+  },
+  "devDependencies": {
+    "@remix-run/dev": "^2.17.4",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11",
+    "zod": "^3.23.8"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

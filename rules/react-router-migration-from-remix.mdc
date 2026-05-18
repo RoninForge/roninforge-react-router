@@ -1,0 +1,123 @@
+---
+description: Stage-by-stage migration from Remix v2 to React Router 7 Framework Mode. Package rename table, config file rename (remix.config.js to react-router.config.ts), Vite plugin rename, entry server/browser component rename, removal of json() and defer(), and the official codemod pointer (npx codemod remix/2/react-router/upgrade).
+globs: app/**/*.{ts,tsx,js,jsx},package.json,remix.config.{js,ts},react-router.config.{ts,js},vite.config.{ts,js}
+alwaysApply: false
+---
+
+# Migrating from Remix v2 to React Router 7
+
+Remix v2 was the last Remix release. The Remix and React Router teams merged the projects and shipped the successor as React Router v7 in November 2024. Framework Mode is the new name for Remix-style apps. The official upgrade guide tracks the migration; the codemod automates most of it.
+
+## Codemod (run first)
+
+```bash
+npx codemod remix/2/react-router/upgrade
+```
+
+The codemod rewrites imports, renames the config file, and updates `package.json` scripts. Review the diff, then iterate manually on what it could not infer.
+
+## Package rename
+
+| Remix v2                       | React Router v7                          |
+|--------------------------------|------------------------------------------|
+| `@remix-run/react`             | `react-router`                           |
+| `@remix-run/node`              | `react-router` + `@react-router/node`    |
+| `@remix-run/cloudflare`        | `@react-router/cloudflare`               |
+| `@remix-run/express`           | `@react-router/express`                  |
+| `@remix-run/architect`         | `@react-router/architect`                |
+| `@remix-run/dev`               | `@react-router/dev`                      |
+| `@remix-run/serve`             | `@react-router/serve`                    |
+| `@remix-run/fs-routes` (v2.16+)| `@react-router/fs-routes`                |
+| `@remix-run/server-runtime`    | `react-router`                           |
+| `@remix-run/testing`           | `react-router`                           |
+
+Remove all `@remix-run/*` from `package.json`, then `pnpm install`.
+
+## Script rename
+
+```diff
+- "dev": "remix vite:dev",
+- "start": "remix-serve ./build/server/index.js",
++ "dev": "react-router dev",
++ "start": "react-router-serve ./build/server/index.js",
++ "typecheck": "react-router typegen && tsc",
+```
+
+## Config file rename
+
+```diff
+- // remix.config.js
+- module.exports = { ignoredRouteFiles: ["**/.*"] };
++ // react-router.config.ts
++ import type { Config } from "@react-router/dev/config";
++ export default { ssr: true } satisfies Config;
+```
+
+Delete `remix.config.js` after creating `react-router.config.ts`.
+
+## Vite plugin rename
+
+```diff
+- // vite.config.ts
+- import { vitePlugin as remix } from "@remix-run/dev";
+- export default defineConfig({ plugins: [remix()] });
++ import { reactRouter } from "@react-router/dev/vite";
++ import tailwindcss from "@tailwindcss/vite";
++ export default defineConfig({ plugins: [tailwindcss(), reactRouter()] });
+```
+
+## Entry components rename
+
+```diff
+- // app/entry.server.tsx
+- import { RemixServer } from "@remix-run/react";
+- <RemixServer context={remixContext} url={request.url} />
++ import { ServerRouter } from "react-router";
++ <ServerRouter context={remixContext} url={request.url} />
+
+- // app/entry.client.tsx
+- import { RemixBrowser } from "@remix-run/react";
+- hydrateRoot(document, <RemixBrowser />);
++ import { HydratedRouter } from "react-router/dom";
++ hydrateRoot(document, <HydratedRouter />);
+```
+
+## json() and defer() removed
+
+```diff
+- import { json, defer } from "@remix-run/node";
+- return json({ user });
+- return defer({ slow });
++ return { user };
++ return { slow };                     // Promise streamed via Single Fetch
++ // when status/headers needed:
++ import { data } from "react-router";
++ return data({ user }, { status: 201 });
+```
+
+## Type renames
+
+```diff
+- import type { LoaderFunctionArgs, ActionFunctionArgs, MetaFunction } from "@remix-run/node";
+- export const loader = async ({ request }: LoaderFunctionArgs) => { ... };
++ import type { Route } from "./+types/<route>";
++ export async function loader({ request }: Route.LoaderArgs) { ... }
+```
+
+After typegen runs, the `Route` namespace replaces every loader/action/meta/links generic type.
+
+## tsconfig include
+
+```diff
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
++   ".react-router/types/**/*"
+  ],
+```
+
+## File-name conventions
+
+Remix v2 conventions still apply (`_index.tsx`, `$id`, `_layout.tsx`, `$.tsx`). If you used `flatRoutes()` you only need to swap the package name (`@remix-run/fs-routes` to `@react-router/fs-routes`).
+
+Source: https://reactrouter.com/upgrading/remix

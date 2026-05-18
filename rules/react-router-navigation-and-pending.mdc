@@ -1,0 +1,104 @@
+---
+description: React Router 7 navigation and pending UI. useNavigation (not useTransition) for global pending state, useFetcher for in-place mutations, useBlocker for unsaved-changes prompts (must call reset), useViewTransitionState for shared-element transitions, <Link prefetch="intent"> for hover-prefetching. The unstable_ prefix on view transitions was dropped in v7.
+globs: app/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# React Router 7 Navigation and Pending
+
+## useNavigation
+
+Global pending state for the next navigation or submission.
+
+```tsx
+import { useNavigation } from "react-router";
+function GlobalSpinner() {
+  const navigation = useNavigation();
+  const busy = navigation.state !== "idle";
+  return busy ? <div role="status">Loading...</div> : null;
+}
+```
+
+Do not confuse with React's `useTransition` (state batching) or a non-existent `react-router` `useTransition` (Remix v1 name, removed in v2 already).
+
+## useNavigate vs redirect
+
+Prefer server `redirect()` from a loader/action over client `useNavigate()` for auth gates. The loader redirect is atomic and avoids a flash of authenticated UI.
+
+```ts
+// server-side, in loader
+import { redirect } from "react-router";
+const user = await getUser(request);
+if (!user) throw redirect("/login");
+```
+
+Use `useNavigate()` for programmatic post-event navigation (after a websocket message, a timer, etc.) where no loader/action is involved.
+
+## useFetcher
+
+Submit data or load route data without a navigation. See `react-router-forms.mdc` for `<fetcher.Form>`. Pass a unique `key` per fetcher in a list:
+
+```tsx
+const fetcher = useFetcher({ key: `row-${id}` });
+```
+
+## useBlocker
+
+Prompt on attempted navigation while a form is dirty. Always call `blocker.reset()` (or `proceed()`) when the dirty state clears.
+
+```tsx
+import { useBlocker } from "react-router";
+const blocker = useBlocker(dirty);
+useEffect(() => {
+  if (!dirty && blocker.state === "blocked") blocker.reset();
+}, [dirty, blocker]);
+
+if (blocker.state === "blocked") {
+  return (
+    <dialog open>
+      <p>Unsaved changes</p>
+      <button onClick={() => blocker.proceed()}>Leave</button>
+      <button onClick={() => blocker.reset()}>Stay</button>
+    </dialog>
+  );
+}
+```
+
+## useViewTransitionState
+
+```tsx
+import { Link, useViewTransitionState } from "react-router";
+function PhotoLink({ id }: { id: string }) {
+  const to = `/photos/${id}`;
+  const isTransitioning = useViewTransitionState(to);
+  return (
+    <Link to={to} viewTransition style={{ viewTransitionName: isTransitioning ? `photo-${id}` : "" }}>
+      Open
+    </Link>
+  );
+}
+```
+
+The `unstable_useViewTransitionState` and `unstable_viewTransition` prop from Remix v2 are gone in v7. Use the stable names.
+
+## Prefetching
+
+```tsx
+<Link to="/dashboard" prefetch="intent">Dashboard</Link>
+```
+
+Values: `"none"` (default), `"intent"` (on hover or focus), `"render"` (on link render), `"viewport"` (when scrolled into view). `"intent"` is the sweet spot for primary CTAs.
+
+## Refused patterns
+
+- `import { useTransition } from "react-router"`. Does not exist; use `useNavigation`.
+- `unstable_useViewTransitionState` / `unstable_viewTransition`. Dropped.
+- `useNavigate` inside `useEffect` for auth redirect. Use server `redirect()`.
+- `useFetcher()` (no key) in a list. Submissions stomp each other.
+- `useBlocker(dirty)` without ever calling `blocker.reset()`. User is trapped after a save.
+
+Sources:
+- https://reactrouter.com/api/hooks/useNavigation
+- https://reactrouter.com/api/hooks/useBlocker
+- https://reactrouter.com/api/hooks/useViewTransitionState
+- https://reactrouter.com/api/components/Link

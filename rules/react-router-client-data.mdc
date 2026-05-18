@@ -1,0 +1,78 @@
+---
+description: React Router 7 client-side data. clientLoader and clientAction run in the browser, mirror the server loader/action shape, and integrate with Single Fetch. clientLoader.hydrate = true forces it to run on initial load and REQUIRES an exported HydrateFallback. SPA mode (ssr: false) allows only a root loader.
+globs: app/routes/**/*.{ts,tsx},react-router.config.{ts,js}
+alwaysApply: false
+---
+
+# React Router 7 Client Data
+
+`clientLoader` and `clientAction` are browser-only counterparts to `loader` and `action`. Use them when:
+
+- The data lives in `IndexedDB`, `localStorage`, or another browser-only API.
+- You want to layer a client cache (SWR, query) on top of a server loader.
+- You are in SPA mode (`ssr: false`) and need data fetching on non-root routes.
+
+## Canonical shape
+
+```tsx
+import type { Route } from "./+types/profile";
+
+export async function loader({ params }: Route.LoaderArgs) {
+  return { profile: await getProfileFromDb(params.id) };
+}
+
+export async function clientLoader({ params, serverLoader }: Route.ClientLoaderArgs) {
+  const fresh = await fetch(`/api/profile/${params.id}`).then((r) => r.json());
+  return { profile: fresh };
+}
+
+export async function clientAction({ request }: Route.ClientActionArgs) {
+  await fetch("/api/profile", { method: "POST", body: await request.formData() });
+  return { ok: true };
+}
+
+export default function Profile({ loaderData }: Route.ComponentProps) {
+  return <pre>{JSON.stringify(loaderData.profile)}</pre>;
+}
+```
+
+## Hydration
+
+By default `clientLoader` does NOT run on initial load (the server loader's data is reused). To force it on hydration:
+
+```tsx
+export async function clientLoader({ serverLoader }: Route.ClientLoaderArgs) {
+  return { profile: await fetchFresh() };
+}
+clientLoader.hydrate = true as const;
+
+export function HydrateFallback() {
+  return <p>Loading profile...</p>;
+}
+```
+
+`HydrateFallback` is mandatory when `clientLoader.hydrate === true`. Without it v7 throws at hydration.
+
+## SPA mode
+
+```ts
+// react-router.config.ts
+import type { Config } from "@react-router/dev/config";
+export default { ssr: false } satisfies Config;
+```
+
+In SPA mode:
+
+- Only `app/root.tsx` may export a server `loader` (used at prerender for the shell).
+- All other route data must come from `clientLoader`.
+- A server `loader` on a non-root route is a build error.
+
+## Refused patterns
+
+- `import fs from "node:fs"` inside a `clientLoader`. Node built-ins are unresolved in the browser bundle.
+- `clientLoader.hydrate = true` without exporting `HydrateFallback`. Throws at hydration.
+- Putting auth checks in `clientLoader` instead of the server `loader`. Authenticated content flashes before the redirect.
+
+Sources:
+- https://reactrouter.com/start/framework/data-loading#client-data-loading
+- https://reactrouter.com/how-to/spa

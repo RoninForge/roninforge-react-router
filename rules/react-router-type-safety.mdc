@@ -1,0 +1,83 @@
+---
+description: React Router 7 Framework Mode per-route type generation. Run react-router typegen to emit .react-router/types/, include it in tsconfig, prefer Route.LoaderArgs over LoaderFunctionArgs, prefer Route.ComponentProps over useLoaderData<typeof loader>. Adds the canonical typecheck script.
+globs: tsconfig*.json,app/**/*.{ts,tsx},package.json
+alwaysApply: false
+---
+
+# React Router 7 Type Safety
+
+v7 generates per-route type namespaces. Each route file has a sibling `./+types/<file-base>` import that resolves to a generated `.react-router/types/...` file. The generated file declares a `Route` namespace with `LoaderArgs`, `ActionArgs`, `MetaArgs`, `HeadersArgs`, `ComponentProps`, `ErrorBoundaryProps`, `LinksFunction`, and `ShouldRevalidateFunctionArgs`. URL params and Single Fetch serialization shapes are typed end-to-end.
+
+## tsconfig.json
+
+```json
+{
+  "include": ["**/*.ts", "**/*.tsx", ".react-router/types/**/*"],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "rootDirs": [".", "./.react-router/types"],
+    "types": ["@react-router/node/globals", "vite/client"],
+    "paths": { "~/*": ["./app/*"] }
+  }
+}
+```
+
+The two load-bearing keys are `include` (must contain `.react-router/types/**/*`) and `rootDirs` (lets `./+types/<name>` resolve to a sibling-virtual path).
+
+## package.json scripts
+
+```json
+{
+  "scripts": {
+    "dev": "react-router dev",
+    "build": "react-router build",
+    "start": "react-router-serve ./build/server/index.js",
+    "typecheck": "react-router typegen && tsc"
+  }
+}
+```
+
+`react-router typegen` writes the types. `react-router dev` and `react-router build` run typegen as a side effect, but `tsc` does not, so wrap it.
+
+## .gitignore
+
+```
+.react-router/
+```
+
+Generated types are deterministic and should not be checked in.
+
+## Per-route usage
+
+```tsx
+// app/routes/products.$pid.tsx
+import type { Route } from "./+types/products.$pid";
+
+export async function loader({ params, request }: Route.LoaderArgs) {
+  //  params.pid is string (typed from the file name)
+  //  request is Request
+}
+
+export default function Product({ loaderData, actionData, params }: Route.ComponentProps) {
+  // loaderData is the awaited return type of loader, after Single Fetch serialization
+}
+```
+
+## Refused patterns
+
+- `import type { LoaderFunctionArgs, LoaderFunction, ActionFunction, MetaFunction, LinksFunction } from "react-router"` for Framework Mode routes. These exist for Data Mode interop but lose typegen benefits.
+- `useLoaderData<typeof loader>()`: bypasses Single Fetch typing. Use `Route.ComponentProps`.
+- Bare `tsc` in CI without `react-router typegen` first: `Route` namespace types will be `any`.
+
+Source: https://reactrouter.com/explanation/type-safety

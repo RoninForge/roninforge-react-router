@@ -1,0 +1,86 @@
+---
+description: React Router 7 sessions and environment variables. Use createCookieSessionStorage with full security attrs (httpOnly, secure, sameSite, secrets). Keep server-only code in app/.server/ or *.server.ts files. Validate process.env with Zod. VITE_* env vars ship to the browser; never put secrets in them.
+globs: app/.server/**,app/**/*.server.{ts,tsx},app/**/env.{ts,tsx}
+alwaysApply: false
+---
+
+# React Router 7 Sessions and Environment
+
+## Cookie sessions
+
+```ts
+// app/.server/session.ts
+import { createCookieSessionStorage } from "react-router";
+import { env } from "./env";
+
+export const sessionStorage = createCookieSessionStorage<{ userId: string }>({
+  cookie: {
+    name: "__session",
+    httpOnly: true,
+    secure: env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30,
+    secrets: [env.SESSION_SECRET],
+  },
+});
+
+export const { getSession, commitSession, destroySession } = sessionStorage;
+```
+
+Required attributes: `httpOnly` (block JS access), `secure` (HTTPS only in production), `sameSite: "lax"` (CSRF baseline), `secrets` (rotating array, first is the current signer).
+
+## Server-only modules
+
+Three ways to keep code off the client bundle:
+
+1. Files under `app/.server/` (entire folder treated as server-only).
+2. Files matching `*.server.ts` / `*.server.tsx`.
+3. Files matching `*.server/*` (treated as a server-only directory).
+
+A db driver, a secret-reading module, or a private API client all belong here. Importing such a file from a client-only path is a build error.
+
+```
+app/
+  .server/
+    db.ts
+    env.ts
+    session.ts
+  routes/
+    products.tsx          imports ~/.server/db (allowed; loader uses it server-side)
+```
+
+## Environment variables
+
+```ts
+// app/.server/env.ts
+import { z } from "zod";
+
+const EnvSchema = z.object({
+  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  SESSION_SECRET: z.string().min(32),
+  DATABASE_URL: z.string().url(),
+});
+
+export const env = EnvSchema.parse(process.env);
+```
+
+Parse once at module load. A missing or weak value crashes boot, which is the desired behaviour.
+
+## Vite env var rules
+
+- `import.meta.env.VITE_FOO` is inlined into both server and client bundles. Treat any `VITE_*` value as PUBLIC by definition; Vite documents the `VITE_` prefix itself as the client-exposure marker.
+- Never put a secret in a `VITE_*` var.
+- Some teams add a `VITE_PUBLIC_` sub-prefix as a project-level naming convention to make the intent obvious at the call site. This is a style choice, not a framework rule: Vite ships only `VITE_`.
+- Server-only env reads use `process.env.FOO` from a `.server` module.
+
+## Refused patterns
+
+- `createCookieSessionStorage({ cookie: { name, secrets: ["dev-secret"] }})`. Missing httpOnly/secure/sameSite, hardcoded secret.
+- `import.meta.env.VITE_STRIPE_SECRET_KEY` in a loader. Leaked to the client.
+- `process.env.SESSION_SECRET!` with no Zod check. Silently boots with `undefined` in some runtimes, signing cookies with a single character key.
+
+Sources:
+- https://reactrouter.com/explanation/sessions-and-cookies
+- https://reactrouter.com/how-to/server-only-code
+- https://vite.dev/guide/env-and-mode

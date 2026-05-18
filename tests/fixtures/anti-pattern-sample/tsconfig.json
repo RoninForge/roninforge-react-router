@@ -1,0 +1,16 @@
+{
+  "//": "ANTI-PATTERN #14: missing .react-router/types/**/* in include. Per-route Route namespace silently resolves to any.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "types": ["node"]
+  },
+  "include": ["app/**/*"]
+}
